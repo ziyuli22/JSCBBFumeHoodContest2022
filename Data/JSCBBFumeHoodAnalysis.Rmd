@@ -1,0 +1,516 @@
+---
+title: "JSCBB Fume Hood Contest Write-Up Code"
+author: "Ziyu Li"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(rstatix)
+library(ggpubr)
+```
+
+# Data Cleaning
+```{r The-Data-01, echo=FALSE}
+file <- read.delim("JSCBB_Contest_2022_Hood_Data.txt", 
+                   header = TRUE, sep = "\t")
+#separate them into sash height vs. slider gap files
+sash_height <- select(file, Hood.Number, Floor, Wing, SashP1, SashP2, Sash1, Sash2,
+                      Sash3, Sash4, Sash5, Sash6, Sash7, Sash8, Sash9)
+slider_gap <- select(file, Hood.Number, Floor, Wing, SliderP1, SliderP2, Slider1,
+                     Slider2, Slider3, Slider4, Slider5, Slider6, Slider7,
+                     Slider8, Slider9)
+#removing NA's from the dataset. 
+sash_height <- na.omit(sash_height)
+slider_gap <- na.omit(slider_gap)
+#and making sure all the measured values are "Numeric"
+sash_height[, 4:ncol(slider_gap)] <- lapply(4:ncol(sash_height), function(x) as.numeric(sash_height[[x]]))
+slider_gap[, 4:ncol(slider_gap)] <- lapply(4:ncol(slider_gap), function(x) as.numeric(slider_gap[[x]]))
+
+#Door information
+door <- read.delim("JSCBB_Contest_2022_Door_Data.txt", 
+                   header = TRUE, sep = "\t")
+door <- na.omit(door) #removing NAs, there were no NAs in the dataset
+Pdoor <- c()
+for (i in 1:10){
+  Pdoor[i] <- sum(door[,i+3] == 1)/nrow(door)
+}
+
+
+```
+
+After clearing the data and removing all the comments, we end up with 92 fume hood for vertical sash height and 75 fume hoods for horizontal slider gap with complete and consistent data throughout the contest.
+
+Graphing some things for the paper:
+```{r}
+lineShape <- c(1,2,3)
+par(mar = c(5,4.5,4,4.5))
+plot(x = seq(0,10, by = 1), y = colMeans(sash_height[,4:14]), type = 'b', lwd = 3, 
+     col = "#80cbc4", las = 1, lty = lineShape[1],
+     main = "Average Fume Hood and Door Behavior \nwith Each Data Collection",
+     ylab = "Average Opening [in]", xlab = "Data Collection Point", 
+     ylim = c(0, 5.5), xaxt = 'n',cex.main = 1.2, cex.lab = 1,
+     cex.axis = 1)
+lines(x = seq(0,10, by = 1), y = colMeans(slider_gap[,4:14]), type = 'b', 
+      lty = lineShape[2], lwd = 3, col = "#f85f8f")
+
+par(new = TRUE)
+plot(x = seq(0,10, by = 1), y = c(NA,Pdoor), type = 'b', lwd = 3, 
+     col = "#a299d4", main = "", ylab = "", xlab = "", axes = FALSE,
+     ylim = c(0.5, 1), xaxt = 'n',cex.main = 1.2, cex.lab = 1, 
+     cex.axis = 1, lty = lineShape[3])
+axis(side = 4, las = 1)
+mtext("Proportion", side = 4, line = 3, las = 0)
+axis(side = 1, at = seq(0,10, by = 1), 
+     labels = c("P01", "P02", "C01", "C02", "C03", "C04", "C05", "C06", 
+                "C07", "C08", "C09"), cex.axis = 1)
+legend("bottomleft", legend = c("Proportion Closed Doors",
+                                "Horizontal Slider Total Gap", "Vertical Sash Height"), 
+       lty = rev(lineShape), cex = 0.85, col = c("#a299d4","#f85f8f", "#80cbc4"), 
+       bty = "n", lwd = 3 )
+```
+# Assumptions
+Outliers removed and examine normality with Shapiro test due to small sample size. 
+```{R}
+#convert to long-format
+sash_height_long <- sash_height %>%
+  gather(key = "collection", value = "height", SashP1, SashP2, Sash1, Sash2, 
+         Sash3, Sash4, Sash5, Sash6, Sash7, Sash8, Sash9) %>%
+  convert_as_factor(Hood.Number, collection)
+#first, get rid of labs that did not change, since some hoods aren't in use much
+summary <- sash_height_long %>%
+  group_by(Hood.Number) %>%
+  get_summary_stats(height)
+chosen <- summary$Hood.Number[summary$mean == 0]
+chose <- as.factor(chosen)
+sash_height_long <- sash_height_long[! sash_height_long$Hood.Number %in% chose,]
+
+# Identify outliers
+outliers_sash <- sash_height_long %>%
+  group_by(collection) %>%
+  identify_outliers(height)
+outliers_sash <- as.data.frame(outliers_sash)
+
+# prepare for removal
+chosen_sash <- matrix(data = NA, nrow = nrow(outliers_sash), ncol = 1)
+for (i in 1:dim(outliers_sash)[1]){
+  if (outliers_sash$is.extreme[i] == TRUE){
+    chosen_sash[i] <- as.character(outliers_sash[i,2])
+  } else {
+    chosen_sash[i] <- NA
+  }
+}
+chosen_sash <- na.omit(chosen_sash)
+facchosen_sash <- factor(chosen_sash)
+sash_height_clean <- sash_height_long[! sash_height_long$Hood.Number %in% facchosen_sash,]
+
+#check within subject samples
+summary_sash <- sash_height_clean %>%
+  group_by(collection) %>%
+  get_summary_stats(height)
+data.frame(summary_sash)
+#Shapiro-Wilks. Null = normality is met, alternative = not met
+shapiroTest_sash <- sash_height_clean %>%
+  group_by(collection) %>%
+  shapiro_test(height)
+shapiroTest_sash
+```
+```{r}
+range(shapiroTest_sash$p)
+```
+There are 46 between-subject samples. So 46 samples per time slot for sashes. P-values range from $1.37 \times 10^{-11}$ to $1.23 \times 10^{-7}$ for vertical sash height. Indicating non-normality. 
+
+```{r}
+#converting to long form and identify outliers
+slider_gap_long <- slider_gap %>%
+  gather(key = "collection", value = "gap", SliderP1, SliderP2, Slider1, Slider2, 
+         Slider3, Slider4, Slider5, Slider6, Slider7, Slider8, Slider9) %>%
+  convert_as_factor(Hood.Number, collection)
+#get rid of the hoods that weren't used
+summary_slider <- slider_gap_long %>%
+  group_by(Hood.Number) %>%
+  get_summary_stats(gap)
+chosen_slider <- summary$Hood.Number[summary$mean == 0]
+chose_slider <- as.factor(chosen_slider)
+slider_gap_long <- slider_gap_long[! slider_gap_long$Hood.Number %in% chose_slider,]
+
+outliers_slider <- slider_gap_long %>%
+  group_by(collection) %>%
+  identify_outliers(gap)
+outliers_slider <- as.data.frame(outliers_slider)
+
+#Clean out the influential outliers
+chosen_slider <- matrix(data = NA, nrow = nrow(outliers_slider), ncol = 1)
+for (i in 1:dim(outliers_slider)[1]){
+  if (outliers_slider$is.extreme[i] == TRUE){
+    chosen_slider[i] <- as.character(outliers_slider[i,2])
+  } else {
+    chosen_slider[i] <- NA
+  }
+}
+chosen_slider <- na.omit(chosen_slider)
+facchosen_slider <- factor(chosen_slider)
+slider_gap_clean <- slider_gap_long[! slider_gap_long$Hood.Number %in% facchosen_slider,]
+
+#within sample n
+summary_slider <- slider_gap_clean  %>%
+  group_by(collection) %>%
+  get_summary_stats(gap)
+data.frame(summary_slider)
+#Shapiro-Wilks. Null = normality is met, alternative = not met
+shapiroTest_slider <- slider_gap_clean  %>%
+  group_by(collection) %>%
+  shapiro_test(gap)
+shapiroTest_slider
+```
+
+```{R}
+range(shapiroTest_slider$p)
+```
+
+There are 28 within-subject samples. P-value for the Shapiro-Wilks test is from $4.74 \times 10^{-10}$ to $ 6.78 \times 10^{-6}$ for horizontal sliders. 
+
+Sphericity is not needed since the correction is built in. 
+
+# Longitudinal ANOVA Test
+```{r}
+vert.anov <- anova_test(data = sash_height_clean, dv = height, wid = Hood.Number, within = collection)
+vert.anov
+get_anova_table(vert.anov)
+```
+
+
+
+```{R}
+horiz.anov <- anova_test(data = slider_gap_clean, dv = gap, wid = Hood.Number, within = collection)
+horiz.anov
+get_anova_table(horiz.anov)
+```
+
+
+# Post-Hoc
+```{r}
+order <- c("SashP1", "SashP2", "Sash1", "Sash2", "Sash3", "Sash4", 
+           "Sash5", "Sash6", "Sash7", "Sash8", "Sash9")
+pwc <- sash_height_clean %>%
+  pairwise_t_test(
+    height ~ collection, paired = TRUE,
+    p.adjust.method = "BH"
+    )
+
+pwc <- pwc %>% add_xy_position(x = "collection")
+ymax <- 10
+#clean up plotting
+bxp <- ggboxplot(sash_height_clean, x = "collection", 
+                 y = "height", outlier.shape = NA ,  
+                 order = order, ylim = c(0, ymax),
+                 xlab = "Data Collection Point",
+                 ylab = "Height [in]",
+                 main = "Vertical Sash Data with Results of Pairwise t-Test") +
+    theme(
+      plot.title = element_text(hjust = 0.5)
+      )
+pwc[pwc$p.adj.signif == 'ns',] <- NA
+pwc_new <- na.omit(pwc)
+pwc_new
+new_names <- c("P01", "P02", "C01", "C02", "C03", "C04", "C05", 
+               "C06", "C07", "C08","C09")
+
+# Update the levels of the x-axis variable in the plot
+bxp <- bxp +
+  scale_x_discrete(labels = new_names)
+
+# The rest of your code
+min <- 0
+max <- 0
+for (i in 1:nrow(pwc_new)) {
+  for (j in 1:length(order)) {
+    if (pwc_new$group1[i] == order[j]) {
+      min <- j
+    }
+    if (pwc_new$group2[i] == order[j]) {
+      max <- j
+    }
+  }
+  if (min < max) {
+    pwc_new$xmin[i] <- min
+    pwc_new$xmax[i] <- max
+  } else {
+    pwc_new$xmax[i] <- min
+    pwc_new$xmin[i] <- max
+  }
+}
+pwc_new$y.position <- ymax - 6 + seq(1:nrow(pwc_new)) * 0.8
+bxp + 
+  stat_pvalue_manual(pwc_new) +
+  labs(
+    subtitle = get_test_label(vert.anov, detailed = TRUE),
+    caption = get_pwc_label(pwc_new)
+  )
+```
+There was no significant pairs in sliders. 
+
+# Energy
+## Bootstrap CI
+```{r}
+set.seed(123)
+# Vertical Sash Before
+sashBeforeRaw <- sash_height$SashP1
+N <- 2000 # num of bootstrap samples
+n <- length(sashBeforeRaw) # number of draws within each bootstrap sample
+sashBeforeBoot <- c() # empty vector for bootstrap means
+for (i in 1:N) {
+  bootSample <- sample(sashBeforeRaw, size = , replace = TRUE)
+  sashBeforeBoot[i] <- mean(bootSample)
+}
+
+sashAfterRaw <- sash_height$Sash9
+sashAfterBoot <- c() #empty vector for bootstrap means
+for (i in 1:N) {
+  bootSample <- sample(sashAfterRaw, size = n, replace = TRUE)
+  sashAfterBoot[i] <- mean(bootSample)
+}
+
+par(mfrow = c(2,2))
+hist(sash_height$SashP1)
+hist(sash_height$Sash9)
+hist(sashBeforeBoot)
+hist(sashAfterBoot)
+```
+There are still slight skewness but bootstrap method has moslty corrected non-normality. 
+```{r}
+par(mfrow = c(2, 2))
+hist(sashBeforeRaw, freq = FALSE, col = "#80cbc4", xlim = c(0,20), ylim = c(0,0.9),
+     main = "Raw Data Before Contest", xlab = "Vertical Sash Height [in]",
+     breaks = 15)
+hist(sashBeforeBoot, freq = FALSE, col = "#80cbc4", xlim = c(0, 7), ylim = c(0, 0.9),
+     main = "Bootstrap Data Before Contest", xlab = "Mean Vertical Sash Height [in]",
+     breaks = 15)
+hist(sashAfterRaw, freq = FALSE, col = "#f85f8f", xlim = c(0,20), ylim = c(0,0.9),
+    main = "Raw Data End of Contest", xlab = "Vertical Sash Height [in]",
+    breaks = 15)
+hist(sashAfterBoot, freq = FALSE, col = "#f85f8f",xlim = c(0, 7), ylim = c(0, 0.9),
+     main = "Bootstrap Data End of Contest", xlab = "Mean Vertical Sash Height [in]",
+     breaks = 10)
+```
+Means of raw
+```{r}
+averageBefore <- mean(sashBeforeBoot); averageBefore
+averageAfter <- mean(sashAfterBoot); averageAfter
+```
+
+Empirical confidence intervals:
+```{r}
+sashBeforeCI <- quantile(sashBeforeBoot, c(0.025, 0.975))
+sashAfterCI <- quantile(sashAfterBoot, c(0.025, 0.975))
+sashBeforeCI
+sashAfterCI
+```
+## Face velocity
+```{r}
+velocities <- read.delim("BIOT_Fume_Hood_Velocities.txt", 
+                     header = TRUE, sep = "\t")
+names(velocities) <- c("Room", "Manufacturer", "Model", "AuditDate", "Lfpm", "Cfpm", "Rfpm","Avgfpm")
+velocities <- na.omit(velocities)
+hist(velocities$Avgfpm, breaks = 20) #since this is normal, we can just use the mean for sash height of 14
+length(velocities$Avgfpm)
+```
+Approx linear, so we use average. 
+```{r}
+w <- 6
+velocity_closed <- 100/(w * (2/13)); velocity_closed # not important
+velocity_14 <- mean(as.numeric(velocities$Avgfpm)); velocity_14
+```
+
+```{R}
+flow14 <- velocity_14 * w * 14/12; flow14 #flow rate at 14 inches of sash height
+```
+
+## Flowrate
+interpolation
+```{r}
+heightIn <- c(2, 14)
+flow <- c(100, flow14) # the "y"
+flowBeforeAvg <- approx(heightIn, flow, xout = averageBefore)$y
+flowBeforeAvg #avg flow rate before is 191 cfm
+flowAfterAvg <- 100
+# 95% CI for before contest
+flowBeforeCI <- approx(heightIn, flow, xout = sashBeforeCI)$y
+flowBeforeCI # give (135, 253)
+
+# 95% CI for after contest
+flowAfterCI <- approx(heightIn, flow, xout = sashAfterCI)$y
+#flowAfterCI will give NA for lower bound due to less than 2in
+flowAfterCI[1] <- 100
+flowAfterCI #will give (100, 119)
+
+```
+
+## Power & Energy Cooling/Heating
+Now power of heating and cooling:
+$BTUH_{cooling/heating} = CFM *\Delta T_{cooling/heating} * 0.89$, where $\Delta T_{heating} = 17$ and $\Delta T_{cooling} = 23$ . Multiply that by heating (5125) & cooling degree days (1586), we can get the BTU for cooling and heating for the whole year.
+```{r}
+# Power Heating
+## Before
+powerHeatingBeforeAvg <- 0.89 * flowBeforeAvg * 17; powerHeatingBeforeAvg
+powerHeatingBeforeCI <- 0.89 * flowBeforeCI * 17; powerHeatingBeforeCI
+## After
+powerHeatingAfterAvg <- 0.89 * flowAfterAvg * 17; powerHeatingAfterAvg
+powerHeatingAfterCI <- 0.89 * flowAfterCI * 17; powerHeatingAfterCI
+```
+Mean heating before, after: 2886, 1513
+CI before, after: (2038, 3827), (1513, 1807)
+
+```{r}
+# Power Cooling
+## Before
+powerCoolingBeforeAvg <- 0.89 * flowBeforeAvg * 23; powerCoolingBeforeAvg
+powerCoolingBeforeCI <- 0.89 * flowBeforeCI * 23; powerCoolingBeforeCI
+## After
+powerCoolingAfterAvg <- 0.89 * flowAfterAvg * 23; powerCoolingAfterAvg
+powerCoolingAfterCI <- 0.89 * flowAfterCI * 23; powerCoolingAfterCI
+```
+Mean cooling before, after: 3906, 2047
+CI before, after: (2758, 5178), (2047, 2445)
+
+```{r}
+# Energy Heating
+## Before
+EHeatingBeforeAvg <- 5125 * powerHeatingBeforeAvg
+EHeatingBeforeAvg; sprintf("%.2e", EHeatingBeforeAvg)
+EHeatingBeforeCI <- 5125 * powerHeatingBeforeCI
+sprintf("%.2e", EHeatingBeforeCI)
+
+EHeatingAfterAvg <- 5125 * powerHeatingAfterAvg
+EHeatingAfterAvg
+EHeatingAfterCI <- 5125 * powerHeatingAfterCI
+sprintf("%.2e", EHeatingAfterCI)
+```
+Mean heating before, after: 1.48e+07, 7.75e+06
+CI before, after: (1.04e+07, 1.96e+07), (7.75e+06, 9.26e+06)
+
+```{r}
+# Energy Cooling
+## Before
+ECoolingBeforeAvg <- 1586 * powerCoolingBeforeAvg
+ECoolingBeforeAvg; sprintf("%.2e", ECoolingBeforeAvg)
+ECoolingBeforeCI <- 1586 * powerCoolingBeforeCI
+sprintf("%.2e", ECoolingBeforeCI)
+
+ECoolingAfterAvg <- 1586 * powerCoolingAfterAvg
+ECoolingAfterAvg
+ECoolingAfterCI <- 1586 * powerCoolingAfterCI
+sprintf("%.2e", ECoolingAfterCI)
+```
+Mean heating before, after: 6.19e+06, 3.25e+06
+CI before, after: (4.37e+06, 8.21e+06), (3.25e+06, 3.88e+06)
+
+## Total Energy
+1kWh = 3412.14 BTU
+```{r}
+# Total energy in kWh before
+totEBeforeAvg <- (EHeatingBeforeAvg + ECoolingBeforeAvg)/3412.14
+totEBeforeAvg
+totEBeforeCI <- (EHeatingBeforeCI + ECoolingBeforeCI)/3412.14
+totEBeforeCI
+```
+Total energy before per hood per year is 6141 kWh, with CI (4344.418,8155.074)
+```{r}
+# Total energy in kWh after
+totEAfterAvg <- (EHeatingAfterAvg + ECoolingAfterAvg)/3412.14
+totEAfterAvg
+totEAfterCI <- (EHeatingAfterCI + ECoolingAfterCI)/3412.14
+totEAfterCI
+```
+Total energy after per hood per year is 3224 kWh with CI (3224, 3850.719)
+```{r}
+# Energy savings in kWh
+totESaveAvg <- totEBeforeAvg - totEAfterAvg
+totESaveAvg
+totESaveCI <- totEBeforeCI - totEAfterCI
+totESaveCI
+```
+Total energy savings is 2927.364 kWh per hood per year with CI (1120.439, 4304.355)
+
+## Cost
+```{r}
+# cost for electricity
+costElectricity <- 0.1234 #$/kWh
+costSteamPound <- 27.418 #$/klb
+costSteam <- costSteamPound*3412.14/(1000*1194)
+costSteam
+```
+cost of steam is $0.07835/kWh.
+```{r}
+# Energy savings in kWh for heating
+diffEHeatingAvg <- (EHeatingBeforeAvg - EHeatingAfterAvg)/3412.14
+diffEHeatingAvg
+diffEHeatingCI <- (EHeatingBeforeCI - EHeatingAfterCI)/3412.14
+diffEHeatingCI 
+# Energy savings in kWh for cooling
+diffECoolingAvg <- (ECoolingBeforeAvg - ECoolingAfterAvg)/3412.14
+diffECoolingAvg
+diffECoolingCI <- (ECoolingBeforeCI - ECoolingAfterCI)/3412.14
+diffECoolingCI
+```
+Energy savings for heating is 2063.433 kWh per hood per year, with CI (789.7726, 3034.0436)
+That for cooling is 863.9302 kWh, with CI (330.6666, 1270.3110)
+
+
+```{r}
+# Costs Heating
+costSaveHeatingAvg <- diffEHeatingAvg*costSteam
+costSaveHeatingAvg
+costSaveHeatingCI <- diffEHeatingCI*costSteam
+costSaveHeatingCI
+# Cost Cooling
+costSaveCoolingAvg <- diffECoolingAvg*costElectricity
+costSaveCoolingAvg
+costSaveCoolingCI <- diffECoolingCI*costElectricity
+costSaveCoolingCI
+```
+Cost for heating is $162 per hood per year with CI (61.88143, 237.72788)
+That for cooling is $107, with CI (40.80425, 156.75637)
+
+```{r}
+# Total cost savings
+costSaveAvg <- costSaveHeatingAvg + costSaveCoolingAvg
+costSaveAvg
+costSaveCI <- costSaveHeatingCI + costSaveCoolingCI
+costSaveCI
+```
+Cost is $268 per hood per year with CI (102.6857, 394.4842)
+
+## Building Wide Cost and Energy
+```{r}
+# building energy savings
+buildingESaveAvg <- totESaveAvg*170
+buildingESaveAvg
+buildingESaveCI <- totESaveCI*170
+buildingESaveCI
+
+# building cost saving
+buildingCostSaveAvg <- costSaveAvg*170
+buildingCostSaveAvg
+buildingCostSaveCI <- costSaveCI*170
+buildingCostSaveCI
+```
+With 170 fume hoods, the energy savings is 497651.8 kWh, CI (190474.7,731740.3).
+And cost is $45608.65, CI (17456.57, 67062.32)
+
+# Conclusion
+```{r}
+# average reduction in sash height %
+100*(averageBefore - averageAfter)/averageBefore
+# average reduction in energy
+100*(totEBeforeAvg - totEAfterAvg)/totEBeforeAvg
+```
